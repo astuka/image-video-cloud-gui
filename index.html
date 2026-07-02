@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Image·Video Cloud GUI — OpenRouter</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --panel2: #1e2230; --border: #2a2f3d;
+    --text: #e6e8ee; --muted: #8b91a3; --accent: #6d9eff; --accent2: #9d6dff;
+    --ok: #4ade80; --err: #f87171; --warn: #fbbf24;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); }
+  header { padding: 14px 22px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  header h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  header .sub { color: var(--muted); font-size: 12px; }
+  main { display: grid; grid-template-columns: 380px 1fr; gap: 0; min-height: calc(100vh - 55px); }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .sidebar { background: var(--panel); border-right: 1px solid var(--border); padding: 18px; display: flex; flex-direction: column; gap: 14px; }
+  .content { padding: 18px 22px; overflow-x: hidden; }
+  fieldset { border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin: 0; }
+  legend { font-size: 12px; color: var(--muted); padding: 0 6px; text-transform: uppercase; letter-spacing: .06em; }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 3px; }
+  input[type=text], input[type=password], input[type=number], select, textarea {
+    width: 100%; background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 8px 10px; font-size: 13px; font-family: inherit;
+  }
+  textarea { resize: vertical; min-height: 72px; }
+  select { cursor: pointer; }
+  button {
+    background: var(--accent); color: #0b0d12; border: none; border-radius: 6px;
+    padding: 9px 16px; font-size: 13px; font-weight: 600; cursor: pointer;
+  }
+  button:hover { filter: brightness(1.12); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.secondary { background: var(--panel2); color: var(--text); border: 1px solid var(--border); }
+  button.small { padding: 4px 10px; font-size: 11px; }
+  .row { display: flex; gap: 8px; }
+  .row > * { flex: 1; }
+  .tabs { display: flex; gap: 6px; margin-bottom: 12px; }
+  .tabs button { flex: 1; background: var(--panel2); color: var(--muted); border: 1px solid var(--border); }
+  .tabs button.active { background: var(--accent); color: #0b0d12; border-color: var(--accent); }
+  #tab-video-btn.active { background: var(--accent2); border-color: var(--accent2); }
+  .status { font-size: 12px; padding: 8px 10px; border-radius: 6px; background: var(--panel2); border: 1px solid var(--border); white-space: pre-wrap; }
+  .status.ok { border-color: var(--ok); color: var(--ok); }
+  .status.err { border-color: var(--err); color: var(--err); }
+  .status.busy { border-color: var(--warn); color: var(--warn); }
+  .keyrow { display: flex; gap: 6px; align-items: center; }
+  .keyrow input { flex: 1; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--err); flex: none; }
+  .dot.ok { background: var(--ok); }
+  .results { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; margin-top: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  .card img, .card video { width: 100%; display: block; background: #000; }
+  .card .meta { padding: 10px 12px; font-size: 11px; color: var(--muted); }
+  .card .meta .prompt { color: var(--text); font-size: 12px; margin-bottom: 4px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .card .actions { display: flex; gap: 6px; padding: 0 12px 10px; flex-wrap: wrap; }
+  .modelinfo { font-size: 11px; color: var(--muted); margin-top: 4px; line-height: 1.5; }
+  h2 { font-size: 14px; margin: 18px 0 6px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  .histbar { display: flex; align-items: center; gap: 10px; }
+  .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--warn); border-top-color: transparent; border-radius: 50%; animation: sp 0.8s linear infinite; vertical-align: -2px; margin-right: 6px; }
+  @keyframes sp { to { transform: rotate(360deg); } }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Image·Video Cloud GUI</h1>
+  <span class="sub">OpenRouter wrapper · your key stays in this browser (localStorage) · files land where you choose</span>
+</header>
+<main>
+  <div class="sidebar">
+    <fieldset>
+      <legend>API Key</legend>
+      <div class="keyrow">
+        <span class="dot" id="keyDot"></span>
+        <input type="password" id="apiKey" placeholder="sk-or-v1-… (paste your OpenRouter key)">
+        <button class="small secondary" id="toggleKey" title="show/hide">👁</button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button id="saveKey">Save key</button>
+        <button class="secondary" id="clearKey">Forget</button>
+      </div>
+      <div class="modelinfo">Get a key at <a href="https://openrouter.ai/settings/keys" target="_blank" rel="noopener">openrouter.ai → Settings → API Keys</a>. Stored only in this browser's localStorage; sent only to openrouter.ai.</div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Output folder</legend>
+      <div class="row">
+        <button class="secondary" id="pickDir">Choose folder…</button>
+        <button class="secondary small" id="forgetDir">Reset</button>
+      </div>
+      <div class="modelinfo" id="dirLabel">No folder chosen — results will use browser Downloads. (Tip: pick <b>D:\STOCKPILE2\dropbox test\generated</b> for the Dropbox review flow.)</div>
+    </fieldset>
+
+    <div class="tabs">
+      <button id="tab-image-btn" class="active" onclick="setTab('image')">🖼 Image</button>
+      <button id="tab-video-btn" onclick="setTab('video')">🎬 Video</button>
+    </div>
+
+    <!-- IMAGE PANEL -->
+    <fieldset id="panel-image">
+      <legend>Image generation</legend>
+      <label>Model <span id="imgModelCount" style="float:right"></span></label>
+      <select id="imgModel"></select>
+      <div class="modelinfo" id="imgModelInfo"></div>
+      <label>Prompt</label>
+      <textarea id="imgPrompt" placeholder="a fog-shrouded pirate port at dawn, concept art, dramatic lighting"></textarea>
+      <div class="row">
+        <div><label>Resolution</label><select id="imgRes"><option value="">auto</option></select></div>
+        <div><label>Aspect ratio</label><select id="imgAR"><option value="">auto</option></select></div>
+      </div>
+      <div class="row">
+        <div><label>Count (n)</label><input type="number" id="imgN" value="1" min="1" max="10"></div>
+        <div><label>Format</label><select id="imgFmt"><option>png</option><option>jpeg</option><option>webp</option></select></div>
+      </div>
+      <button id="genImg" style="margin-top:12px;width:100%">Generate image</button>
+    </fieldset>
+
+    <!-- VIDEO PANEL -->
+    <fieldset id="panel-video" style="display:none">
+      <legend>Video generation</legend>
+      <label>Model <span id="vidModelCount" style="float:right"></span></label>
+      <select id="vidModel"></select>
+      <div class="modelinfo" id="vidModelInfo"></div>
+      <label>Prompt</label>
+      <textarea id="vidPrompt" placeholder="slow dolly shot through a fog-shrouded pirate port, lanterns flickering"></textarea>
+      <div class="row">
+        <div><label>Duration (s)</label><input type="number" id="vidDur" value="5" min="1" max="60"></div>
+        <div><label>Resolution</label><select id="vidRes"><option value="">auto</option></select></div>
+      </div>
+      <div class="row">
+        <div><label>Aspect ratio</label><select id="vidAR"><option value="">auto</option></select></div>
+        <div><label>Audio</label><select id="vidAudio"><option value="">model default</option><option value="true">on</option><option value="false">off</option></select></div>
+      </div>
+      <button id="genVid" style="margin-top:12px;width:100%">Generate video (async)</button>
+    </fieldset>
+
+    <div class="status" id="status">Ready. Paste your API key, then hit Generate.</div>
+    <button class="secondary small" id="refreshModels">↻ Refresh model lists from OpenRouter</button>
+  </div>
+
+  <div class="content">
+    <div class="histbar">
+      <h2 style="margin:0">Results &amp; history</h2>
+      <button class="secondary small" id="exportHist">Export history JSON</button>
+      <button class="secondary small" id="clearHist">Clear history</button>
+      <span class="modelinfo" id="histCount"></span>
+    </div>
+    <div class="results" id="results"></div>
+  </div>
+</main>
+
+<script>
+"use strict";
+const OR = "https://openrouter.ai/api/v1";
+const $ = id => document.getElementById(id);
+const state = { imgModels: [], vidModels: [], dirHandle: null, history: [] };
+
+/* ---------- fallback model lists (snapshot 2026-07-02, used if live fetch fails) ---------- */
+const FALLBACK_IMG = [
+  "black-forest-labs/flux.2-flex","black-forest-labs/flux.2-klein-4b","black-forest-labs/flux.2-max","black-forest-labs/flux.2-pro",
+  "bytedance-seed/seedream-4.5",
+  "google/gemini-2.5-flash-image","google/gemini-2.5-flash-image-preview","google/gemini-3-pro-image","google/gemini-3-pro-image-preview",
+  "google/gemini-3.1-flash-image","google/gemini-3.1-flash-image-preview","google/gemini-3.1-flash-lite-image",
+  "microsoft/mai-image-2.5",
+  "openai/gpt-5-image","openai/gpt-5-image-mini","openai/gpt-5.4-image-2","openai/gpt-image-1","openai/gpt-image-1-mini","openai/gpt-image-2",
+  "recraft/recraft-v3","recraft/recraft-v4","recraft/recraft-v4-pro","recraft/recraft-v4-pro-vector","recraft/recraft-v4-vector",
+  "recraft/recraft-v4.1","recraft/recraft-v4.1-pro","recraft/recraft-v4.1-pro-vector","recraft/recraft-v4.1-utility","recraft/recraft-v4.1-utility-pro","recraft/recraft-v4.1-vector",
+  "sourceful/riverflow-v2-fast","sourceful/riverflow-v2-fast-preview","sourceful/riverflow-v2-max-preview","sourceful/riverflow-v2-pro","sourceful/riverflow-v2-standard-preview",
+  "sourceful/riverflow-v2.5-fast","sourceful/riverflow-v2.5-pro",
+  "x-ai/grok-imagine-image-quality"
+].map(id => ({ id, name: id }));
+const FALLBACK_VID = [
+  "alibaba/happyhorse-1.0","alibaba/happyhorse-1.1","alibaba/wan-2.6","alibaba/wan-2.7",
+  "bytedance/seedance-1-5-pro","bytedance/seedance-2.0","bytedance/seedance-2.0-fast",
+  "google/veo-3.1","google/veo-3.1-fast","google/veo-3.1-lite",
+  "kwaivgi/kling-v3.0-pro","kwaivgi/kling-v3.0-std","kwaivgi/kling-video-o1",
+  "minimax/hailuo-2.3","openai/sora-2-pro","x-ai/grok-imagine-video"
+].map(id => ({ id, name: id }));
+
+/* ---------- status ---------- */
+function setStatus(msg, cls = "", spinner = false) {
+  const el = $("status");
+  el.className = "status " + cls;
+  el.innerHTML = (spinner ? '<span class="spin"></span>' : "") + msg;
+}
+
+/* ---------- API key ---------- */
+function apiKey() { return localStorage.getItem("or_api_key") || ""; }
+function refreshKeyDot() { $("keyDot").className = "dot" + (apiKey() ? " ok" : ""); }
+$("saveKey").onclick = () => {
+  const k = $("apiKey").value.trim();
+  if (!k) return setStatus("Key field is empty.", "err");
+  localStorage.setItem("or_api_key", k);
+  refreshKeyDot();
+  setStatus("Key saved to this browser.", "ok");
+};
+$("clearKey").onclick = () => {
+  localStorage.removeItem("or_api_key");
+  $("apiKey").value = "";
+  refreshKeyDot();
+  setStatus("Key forgotten.", "ok");
+};
+$("toggleKey").onclick = () => {
+  const i = $("apiKey");
+  i.type = i.type === "password" ? "text" : "password";
+};
+function requireKey() {
+  const k = apiKey();
+  if (!k) { setStatus("No API key. Paste your OpenRouter key and click 'Save key'.", "err"); return null; }
+  return k;
+}
+
+/* ---------- output dir (File System Access API, Chrome/Edge) ---------- */
+$("pickDir").onclick = async () => {
+  if (!window.showDirectoryPicker) return setStatus("Folder picking needs Chrome/Edge. Falling back to Downloads.", "err");
+  try {
+    state.dirHandle = await window.showDirectoryPicker({ mode: "readwrite" });
+    $("dirLabel").textContent = "Saving to: " + state.dirHandle.name + " (auto-save on every generation)";
+    setStatus("Output folder set: " + state.dirHandle.name, "ok");
+  } catch (e) { /* user cancelled */ }
+};
+$("forgetDir").onclick = () => {
+  state.dirHandle = null;
+  $("dirLabel").textContent = "No folder chosen — results will use browser Downloads.";
+};
+
+/* ---------- filename convention: YYYY-MM-DDTHHMMSS-<slug>.<ext> ---------- */
+function slugify(prompt) {
+  return prompt.toLowerCase().replace(/[^a-z0-9\s-]/g, "").trim().split(/\s+/).slice(0, 7).join("-").slice(0, 60) || "untitled";
+}
+function stamp() {
+  const d = new Date(), p = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+async function saveBlob(blob, filename) {
+  if (state.dirHandle) {
+    try {
+      const fh = await state.dirHandle.getFileHandle(filename, { create: true });
+      const w = await fh.createWritable();
+      await w.write(blob); await w.close();
+      return "folder:" + filename;
+    } catch (e) { console.warn("dir save failed, falling back to download", e); }
+  }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+  return "download:" + filename;
+}
+
+/* ---------- model discovery ---------- */
+async function fetchJSON(url, opts) {
+  const r = await fetch(url, opts);
+  if (!r.ok) {
+    let msg = r.status + " " + r.statusText;
+    try { const j = await r.json(); msg = j.error?.message || JSON.stringify(j).slice(0, 300); } catch {}
+    throw new Error(msg);
+  }
+  return r.json();
+}
+async function loadModels() {
+  setStatus("Loading model catalogs from OpenRouter…", "busy", true);
+  try {
+    const [img, vid] = await Promise.all([
+      fetchJSON(OR + "/images/models"),
+      fetchJSON(OR + "/videos/models")
+    ]);
+    state.imgModels = (img.data || []).filter(m => m.id !== "openrouter/auto")
+      .sort((a, b) => a.id.localeCompare(b.id));
+    state.vidModels = (vid.data || []).sort((a, b) => a.id.localeCompare(b.id));
+    setStatus(`Live catalogs loaded: ${state.imgModels.length} image models, ${state.vidModels.length} video models.`, "ok");
+  } catch (e) {
+    state.imgModels = FALLBACK_IMG;
+    state.vidModels = FALLBACK_VID;
+    setStatus("Live catalog fetch failed (" + e.message + ") — using built-in snapshot from 2026-07-02.", "err");
+  }
+  fillModelSelect($("imgModel"), state.imgModels, localStorage.getItem("last_img_model") || "google/gemini-3.1-flash-image");
+  fillModelSelect($("vidModel"), state.vidModels, localStorage.getItem("last_vid_model") || "bytedance/seedance-2.0");
+  $("imgModelCount").textContent = state.imgModels.length + " models";
+  $("vidModelCount").textContent = state.vidModels.length + " models";
+  onImgModelChange(); onVidModelChange();
+}
+function fillModelSelect(sel, models, preferred) {
+  sel.innerHTML = "";
+  const groups = {};
+  for (const m of models) {
+    const org = m.id.split("/")[0];
+    (groups[org] ??= []).push(m);
+  }
+  for (const org of Object.keys(groups).sort()) {
+    const og = document.createElement("optgroup");
+    og.label = org;
+    for (const m of groups[org]) {
+      const o = document.createElement("option");
+      o.value = m.id;
+      o.textContent = m.name && m.name !== m.id ? `${m.name}` : m.id;
+      og.appendChild(o);
+    }
+    sel.appendChild(og);
+  }
+  if (models.some(m => m.id === preferred)) sel.value = preferred;
+}
+
+/* populate per-model parameter dropdowns from capability data */
+function setOptions(sel, values, keepAuto = true) {
+  const cur = sel.value;
+  sel.innerHTML = keepAuto ? '<option value="">auto</option>' : "";
+  for (const v of values || []) {
+    const o = document.createElement("option");
+    o.value = v; o.textContent = v;
+    sel.appendChild(o);
+  }
+  if ([...sel.options].some(o => o.value === cur)) sel.value = cur;
+}
+const DEFAULT_AR = ["1:1","16:9","9:16","4:3","3:4","3:2","2:3","21:9","9:21"];
+function onImgModelChange() {
+  const m = state.imgModels.find(x => x.id === $("imgModel").value);
+  localStorage.setItem("last_img_model", $("imgModel").value);
+  const sp = m?.supported_parameters || {};
+  setOptions($("imgRes"), sp.resolution?.values || ["512","1K","2K","4K"]);
+  setOptions($("imgAR"), sp.aspect_ratio?.values || DEFAULT_AR);
+  $("imgModelInfo").textContent = m?.description ? m.description.slice(0, 180) + "…" : "";
+}
+function onVidModelChange() {
+  const m = state.vidModels.find(x => x.id === $("vidModel").value);
+  localStorage.setItem("last_vid_model", $("vidModel").value);
+  setOptions($("vidRes"), m?.supported_resolutions || ["480p","720p","1080p"]);
+  setOptions($("vidAR"), m?.supported_aspect_ratios || DEFAULT_AR);
+  const price = m?.pricing_skus ? Object.entries(m.pricing_skus).map(([k,v]) => `${k}: $${v}`).join(" · ") : "";
+  $("vidModelInfo").textContent = price;
+}
+$("imgModel").onchange = onImgModelChange;
+$("vidModel").onchange = onVidModelChange;
+$("refreshModels").onclick = loadModels;
+
+/* ---------- tabs ---------- */
+function setTab(t) {
+  $("panel-image").style.display = t === "image" ? "" : "none";
+  $("panel-video").style.display = t === "video" ? "" : "none";
+  $("tab-image-btn").classList.toggle("active", t === "image");
+  $("tab-video-btn").classList.toggle("active", t === "video");
+}
+window.setTab = setTab;
+
+/* ---------- history ---------- */
+function loadHistory() {
+  try { state.history = JSON.parse(localStorage.getItem("or_history") || "[]"); } catch { state.history = []; }
+  renderHistory();
+}
+function pushHistory(entry) {
+  state.history.unshift(entry);
+  if (state.history.length > 200) state.history.length = 200;
+  localStorage.setItem("or_history", JSON.stringify(state.history));
+  renderHistory();
+}
+function renderHistory() {
+  $("histCount").textContent = state.history.length + " entries (media previews live for this session; files are on disk)";
+  const box = $("results");
+  // keep live media cards (this session), re-render text-only history after them
+  for (const el of [...box.querySelectorAll(".card.histonly")]) el.remove();
+  for (const h of state.history) {
+    if (h.sessionLive) continue;
+    const c = document.createElement("div");
+    c.className = "card histonly";
+    c.innerHTML = `<div class="meta">
+      <div class="prompt">${escapeHtml(h.prompt)}</div>
+      ${h.kind === "video" ? "🎬" : "🖼"} ${escapeHtml(h.model)} · ${escapeHtml(h.time)}<br>
+      ${h.cost != null ? "cost: $" + h.cost + " · " : ""}saved: ${escapeHtml(h.file || "-")}
+    </div>
+    <div class="actions"><button class="small secondary" onclick="reusePrompt('${h.kind}', ${JSON.stringify(h.prompt).replace(/"/g, "&quot;")}, '${escapeHtml(h.model)}')">↻ Reuse</button></div>`;
+    box.appendChild(c);
+  }
+}
+function escapeHtml(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c])); }
+window.reusePrompt = (kind, prompt, model) => {
+  setTab(kind);
+  if (kind === "image") { $("imgPrompt").value = prompt; if ([...$("imgModel").options].some(o => o.value === model)) { $("imgModel").value = model; onImgModelChange(); } }
+  else { $("vidPrompt").value = prompt; if ([...$("vidModel").options].some(o => o.value === model)) { $("vidModel").value = model; onVidModelChange(); } }
+  window.scrollTo({ top: 0, behavior: "smooth" });
+};
+$("clearHist").onclick = () => { if (confirm("Clear all history entries?")) { state.history = []; localStorage.setItem("or_history", "[]"); renderHistory(); } };
+$("exportHist").onclick = () => {
+  const blob = new Blob([JSON.stringify(state.history, null, 2)], { type: "application/json" });
+  saveBlob(blob, stamp() + "-generation-history.json");
+};
+
+function addMediaCard({ kind, srcUrl, mediaTag, prompt, model, cost, file }) {
+  const c = document.createElement("div");
+  c.className = "card";
+  c.innerHTML = `${mediaTag}
+    <div class="meta">
+      <div class="prompt">${escapeHtml(prompt)}</div>
+      ${kind === "video" ? "🎬" : "🖼"} ${escapeHtml(model)} · ${new Date().toLocaleString()}<br>
+      ${cost != null ? "cost: $" + cost + " · " : ""}saved: ${escapeHtml(file)}
+    </div>`;
+  $("results").prepend(c);
+}
+
+/* ---------- image generation ---------- */
+$("genImg").onclick = async () => {
+  const key = requireKey(); if (!key) return;
+  const prompt = $("imgPrompt").value.trim();
+  if (!prompt) return setStatus("Write a prompt first.", "err");
+  const model = $("imgModel").value;
+  const fmt = $("imgFmt").value;
+  const body = { model, prompt, output_format: fmt };
+  if ($("imgRes").value) body.resolution = $("imgRes").value;
+  if ($("imgAR").value) body.aspect_ratio = $("imgAR").value;
+  const n = parseInt($("imgN").value) || 1;
+  if (n > 1) body.n = n;
+
+  $("genImg").disabled = true;
+  setStatus("Generating image on " + model + "…", "busy", true);
+  try {
+    const res = await fetchJSON(OR + "/images", {
+      method: "POST",
+      headers: { "Authorization": "Bearer " + key, "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    const cost = res.usage?.cost ?? null;
+    let idx = 0;
+    for (const d of res.data || []) {
+      const mediaType = d.media_type || ("image/" + fmt);
+      const ext = mediaType.includes("svg") ? "svg" : fmt;
+      const bytes = Uint8Array.from(atob(d.b64_json), ch => ch.charCodeAt(0));
+      const blob = new Blob([bytes], { type: mediaType });
+      const filename = `${stamp()}-${slugify(prompt)}${res.data.length > 1 ? "-" + (++idx) : ""}.${ext}`;
+      const saved = await saveBlob(blob, filename);
+      const url = URL.createObjectURL(blob);
+      addMediaCard({ kind: "image", mediaTag: `<img src="${url}" alt="">`, prompt, model, cost, file: filename });
+      pushHistory({ kind: "image", prompt, model, cost, file: filename, time: new Date().toLocaleString(), saved, sessionLive: false });
+    }
+    setStatus(`Done — ${res.data?.length || 0} image(s)` + (cost != null ? `, cost $${cost}` : "") + ".", "ok");
+  } catch (e) {
+    setStatus("Image generation failed: " + e.message, "err");
+  } finally {
+    $("genImg").disabled = false;
+  }
+};
+
+/* ---------- video generation (async submit + poll) ---------- */
+$("genVid").onclick = async () => {
+  const key = requireKey(); if (!key) return;
+  const prompt = $("vidPrompt").value.trim();
+  if (!prompt) return setStatus("Write a prompt first.", "err");
+  const model = $("vidModel").value;
+  const body = { model, prompt };
+  const dur = parseInt($("vidDur").value);
+  if (dur) body.duration = dur;
+  if ($("vidRes").value) body.resolution = $("vidRes").value;
+  if ($("vidAR").value) body.aspect_ratio = $("vidAR").value;
+  if ($("vidAudio").value) body.generate_audio = $("vidAudio").value === "true";
+
+  $("genVid").disabled = true;
+  setStatus("Submitting video job to " + model + "…", "busy", true);
+  try {
+    const job = await fetchJSON(OR + "/videos", {
+      method: "POST",
+      headers: { "Authorization": "Bearer " + key, "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    const pollUrl = job.polling_url || (OR + "/videos/" + job.id);
+    let waited = 0;
+    while (true) {
+      setStatus(`Video job ${job.id}: ${job.status || "pending"} — ${waited}s elapsed (typical 1–5 min)…`, "busy", true);
+      await new Promise(r => setTimeout(r, 10000)); waited += 10;
+      const st = await fetchJSON(pollUrl, { headers: { "Authorization": "Bearer " + key } });
+      job.status = st.status;
+      if (st.status === "completed") {
+        setStatus("Downloading video…", "busy", true);
+        const vidUrl = st.unsigned_urls?.[0] || st.urls?.[0];
+        if (!vidUrl) throw new Error("Job completed but no content URL in response.");
+        const vres = await fetch(vidUrl);
+        const blob = await vres.blob();
+        const filename = `${stamp()}-${slugify(prompt)}.mp4`;
+        const saved = await saveBlob(blob, filename);
+        const url = URL.createObjectURL(blob);
+        const cost = st.usage?.cost ?? null;
+        addMediaCard({ kind: "video", mediaTag: `<video src="${url}" controls></video>`, prompt, model, cost, file: filename });
+        pushHistory({ kind: "video", prompt, model, cost, file: filename, time: new Date().toLocaleString(), saved, sessionLive: false });
+        setStatus(`Video done after ~${waited}s` + (cost != null ? `, cost $${cost}` : "") + ".", "ok");
+        break;
+      }
+      if (st.status === "failed") throw new Error(st.error?.message || st.error || "generation failed");
+      if (waited > 900) throw new Error("Timed out after 15 minutes — check the OpenRouter dashboard for job " + job.id);
+    }
+  } catch (e) {
+    setStatus("Video generation failed: " + e.message, "err");
+  } finally {
+    $("genVid").disabled = false;
+  }
+};
+
+/* ---------- init ---------- */
+refreshKeyDot();
+if (apiKey()) $("apiKey").value = apiKey();
+loadHistory();
+loadModels();
+</script>
+</body>
+</html>
