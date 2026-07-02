@@ -53,6 +53,7 @@
   .results { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; margin-top: 14px; }
   .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
   .card img, .card video { width: 100%; display: block; background: #000; }
+  .card .placeholder { width: 100%; aspect-ratio: 16/9; display: flex; align-items: center; justify-content: center; background: var(--panel2); color: var(--muted); font-size: 12px; flex-direction: column; gap: 8px; }
   .card .meta { padding: 10px 12px; font-size: 11px; color: var(--muted); }
   .card .meta .prompt { color: var(--text); font-size: 12px; margin-bottom: 4px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
   .card .actions { display: flex; gap: 6px; padding: 0 12px 10px; flex-wrap: wrap; }
@@ -60,6 +61,7 @@
   h2 { font-size: 14px; margin: 18px 0 6px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
   .histbar { display: flex; align-items: center; gap: 10px; }
   .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--warn); border-top-color: transparent; border-radius: 50%; animation: sp 0.8s linear infinite; vertical-align: -2px; margin-right: 6px; }
+  .spin.big { width: 28px; height: 28px; border-width: 3px; }
   @keyframes sp { to { transform: rotate(360deg); } }
   a { color: var(--accent); }
 </style>
@@ -91,7 +93,7 @@
         <button class="secondary" id="pickDir">Choose folder…</button>
         <button class="secondary small" id="forgetDir">Reset</button>
       </div>
-      <div class="modelinfo" id="dirLabel">No folder chosen — results will use browser Downloads. (Tip: pick <b>D:\STOCKPILE2\dropbox test\generated</b> for the Dropbox review flow.)</div>
+      <div class="modelinfo" id="dirLabel">No folder chosen — clicking "Save" on a card uses browser Downloads. (Tip: pick <b>D:\STOCKPILE2\dropbox test\generated</b> for the Dropbox review flow.)</div>
     </fieldset>
 
     <div class="tabs">
@@ -115,7 +117,7 @@
         <div><label>Count (n)</label><input type="number" id="imgN" value="1" min="1" max="10"></div>
         <div><label>Format</label><select id="imgFmt"><option>png</option><option>jpeg</option><option>webp</option></select></div>
       </div>
-      <button id="genImg" style="margin-top:12px;width:100%">Generate image</button>
+      <button id="genImg" style="margin-top:12px;width:100%">Queue image</button>
     </fieldset>
 
     <!-- VIDEO PANEL -->
@@ -134,7 +136,7 @@
         <div><label>Aspect ratio</label><select id="vidAR"><option value="">auto</option></select></div>
         <div><label>Audio</label><select id="vidAudio"><option value="">model default</option><option value="true">on</option><option value="false">off</option></select></div>
       </div>
-      <button id="genVid" style="margin-top:12px;width:100%">Generate video (async)</button>
+      <button id="genVid" style="margin-top:12px;width:100%">Queue video</button>
     </fieldset>
 
     <div class="status" id="status">Ready. Paste your API key, then hit Generate.</div>
@@ -156,7 +158,7 @@
 "use strict";
 const OR = "https://openrouter.ai/api/v1";
 const $ = id => document.getElementById(id);
-const state = { imgModels: [], vidModels: [], dirHandle: null, history: [] };
+const state = { imgModels: [], vidModels: [], dirHandle: null, history: [], liveCards: [] };
 
 /* ---------- fallback model lists (snapshot 2026-07-02, used if live fetch fails) ---------- */
 const FALLBACK_IMG = [
@@ -218,13 +220,13 @@ $("pickDir").onclick = async () => {
   if (!window.showDirectoryPicker) return setStatus("Folder picking needs Chrome/Edge. Falling back to Downloads.", "err");
   try {
     state.dirHandle = await window.showDirectoryPicker({ mode: "readwrite" });
-    $("dirLabel").textContent = "Saving to: " + state.dirHandle.name + " (auto-save on every generation)";
+    $("dirLabel").textContent = "Saving to: " + state.dirHandle.name + " (used when you click Save on a card)";
     setStatus("Output folder set: " + state.dirHandle.name, "ok");
   } catch (e) { /* user cancelled */ }
 };
 $("forgetDir").onclick = () => {
   state.dirHandle = null;
-  $("dirLabel").textContent = "No folder chosen — results will use browser Downloads.";
+  $("dirLabel").textContent = "No folder chosen — clicking \"Save\" on a card uses browser Downloads.";
 };
 
 /* ---------- filename convention: YYYY-MM-DDTHHMMSS-<slug>.<ext> ---------- */
@@ -346,59 +348,156 @@ function setTab(t) {
 }
 window.setTab = setTab;
 
-/* ---------- history ---------- */
+/* ---------- escape ---------- */
+function escapeHtml(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c])); }
+
+/* ---------- unified card system ----------
+   One card per generation. Cards live in the results grid.
+   States: pending → generating/polling → completed / failed.
+   Completed cards get a Save button; no auto-download. */
+
+function createCard({ kind, prompt, model, status, statusText }) {
+  const card = document.createElement("div");
+  card.className = "card";
+  card.dataset.kind = kind;
+  card.dataset.model = model;
+  card.dataset.prompt = prompt;
+  card.innerHTML = `
+    <div class="placeholder">
+      <span class="spin big"></span>
+      <span class="ph-text">${escapeHtml(statusText || "Pending…")}</span>
+    </div>
+    <div class="meta">
+      <div class="prompt">${escapeHtml(prompt)}</div>
+      ${kind === "video" ? "🎬" : "🖼"} ${escapeHtml(model)} · ${new Date().toLocaleString()}
+    </div>
+    <div class="actions"></div>`;
+  $("results").prepend(card);
+  return card;
+}
+
+function updateCardPlaceholder(card, text) {
+  const ph = card.querySelector(".placeholder .ph-text");
+  if (ph) ph.textContent = text;
+}
+
+function setCardMedia(card, { kind, blob, url, cost, filename }) {
+  const mediaArea = card.querySelector(".placeholder") || card.querySelector("img,video")?.parentElement;
+  const mediaEl = kind === "video"
+    ? `<video src="${url}" controls preload="metadata" type="video/mp4"></video>`
+    : `<img src="${url}" alt="">`;
+  if (mediaArea) mediaArea.outerHTML = mediaEl;
+
+  // update meta + actions
+  const meta = card.querySelector(".meta");
+  const costStr = cost != null ? ` · cost: $${cost}` : "";
+  meta.innerHTML = `
+    <div class="prompt">${escapeHtml(card.dataset.prompt)}</div>
+    ${kind === "video" ? "🎬" : "🖼"} ${escapeHtml(card.dataset.model)} · ${new Date().toLocaleString()}${costStr}
+    ${filename ? `<br>file: ${escapeHtml(filename)}` : ""}`;
+
+  const actions = card.querySelector(".actions");
+  actions.innerHTML = "";
+  const saveBtn = document.createElement("button");
+  saveBtn.className = "small secondary";
+  saveBtn.textContent = "💾 Save";
+  saveBtn.onclick = async () => {
+    saveBtn.disabled = true;
+    saveBtn.textContent = "Saving…";
+    try {
+      await saveBlob(blob, filename);
+      saveBtn.textContent = "✓ Saved";
+    } catch (e) {
+      saveBtn.textContent = "✗ Failed";
+      saveBtn.disabled = false;
+    }
+  };
+  actions.appendChild(saveBtn);
+
+  const reuseBtn = document.createElement("button");
+  reuseBtn.className = "small secondary";
+  reuseBtn.textContent = "↻ Reuse";
+  reuseBtn.onclick = () => reusePrompt(kind, card.dataset.prompt, card.dataset.model);
+  actions.appendChild(reuseBtn);
+}
+
+function setCardError(card, errorMsg) {
+  const ph = card.querySelector(".placeholder");
+  if (ph) {
+    ph.innerHTML = `<span style="color:var(--err);font-size:24px">✗</span><span class="ph-text" style="color:var(--err)">${escapeHtml(errorMsg)}</span>`;
+  }
+  const actions = card.querySelector(".actions");
+  actions.innerHTML = "";
+  const retryBtn = document.createElement("button");
+  retryBtn.className = "small secondary";
+  retryBtn.textContent = "↻ Reuse";
+  retryBtn.onclick = () => reusePrompt(card.dataset.kind, card.dataset.prompt, card.dataset.model);
+  actions.appendChild(retryBtn);
+}
+
+function reusePrompt(kind, prompt, model) {
+  setTab(kind);
+  if (kind === "image") {
+    $("imgPrompt").value = prompt;
+    if ([...$("imgModel").options].some(o => o.value === model)) { $("imgModel").value = model; onImgModelChange(); }
+  } else {
+    $("vidPrompt").value = prompt;
+    if ([...$("vidModel").options].some(o => o.value === model)) { $("vidModel").value = model; onVidModelChange(); }
+  }
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+window.reusePrompt = reusePrompt;
+
+/* ---------- history (localStorage text records, rendered as text-only cards on load) ---------- */
 function loadHistory() {
   try { state.history = JSON.parse(localStorage.getItem("or_history") || "[]"); } catch { state.history = []; }
-  renderHistory();
+  renderHistoryCards();
 }
 function pushHistory(entry) {
   state.history.unshift(entry);
   if (state.history.length > 200) state.history.length = 200;
   localStorage.setItem("or_history", JSON.stringify(state.history));
-  renderHistory();
+  updateHistCount();
 }
-function renderHistory() {
-  $("histCount").textContent = state.history.length + " entries (media previews live for this session; files are on disk)";
+function updateHistCount() {
+  const live = document.querySelectorAll("#results .card.live").length;
+  const total = state.history.length;
+  $("histCount").textContent = total + " history entries" + (live ? " · " + live + " active" : "");
+}
+function renderHistoryCards() {
   const box = $("results");
-  // keep live media cards (this session), re-render text-only history after them
-  for (const el of [...box.querySelectorAll(".card.histonly")]) el.remove();
   for (const h of state.history) {
-    if (h.sessionLive) continue;
     const c = document.createElement("div");
     c.className = "card histonly";
-    c.innerHTML = `<div class="meta">
-      <div class="prompt">${escapeHtml(h.prompt)}</div>
-      ${h.kind === "video" ? "🎬" : "🖼"} ${escapeHtml(h.model)} · ${escapeHtml(h.time)}<br>
-      ${h.cost != null ? "cost: $" + h.cost + " · " : ""}saved: ${escapeHtml(h.file || "-")}
-    </div>
-    <div class="actions"><button class="small secondary" onclick="reusePrompt('${h.kind}', ${JSON.stringify(h.prompt).replace(/"/g, "&quot;")}, '${escapeHtml(h.model)}')">↻ Reuse</button></div>`;
+    const costStr = h.cost != null ? ` · cost: $${h.cost}` : "";
+    c.innerHTML = `
+      <div class="placeholder" style="aspect-ratio:auto;padding:20px">
+        <span>${h.kind === "video" ? "🎬" : "🖼"}</span>
+        <span class="ph-text">saved: ${escapeHtml(h.file || "-")}</span>
+      </div>
+      <div class="meta">
+        <div class="prompt">${escapeHtml(h.prompt)}</div>
+        ${escapeHtml(h.model)} · ${escapeHtml(h.time || "")}${costStr}
+      </div>
+      <div class="actions">
+        <button class="small secondary" onclick="reusePrompt('${h.kind}', ${JSON.stringify(h.prompt).replace(/"/g, "&quot;")}, '${escapeHtml(h.model)}')">↻ Reuse</button>
+      </div>`;
     box.appendChild(c);
   }
+  updateHistCount();
 }
-function escapeHtml(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c])); }
-window.reusePrompt = (kind, prompt, model) => {
-  setTab(kind);
-  if (kind === "image") { $("imgPrompt").value = prompt; if ([...$("imgModel").options].some(o => o.value === model)) { $("imgModel").value = model; onImgModelChange(); } }
-  else { $("vidPrompt").value = prompt; if ([...$("vidModel").options].some(o => o.value === model)) { $("vidModel").value = model; onVidModelChange(); } }
-  window.scrollTo({ top: 0, behavior: "smooth" });
+$("clearHist").onclick = () => {
+  if (confirm("Clear all history entries?")) {
+    state.history = [];
+    localStorage.setItem("or_history", "[]");
+    document.querySelectorAll("#results .card.histonly").forEach(el => el.remove());
+    updateHistCount();
+  }
 };
-$("clearHist").onclick = () => { if (confirm("Clear all history entries?")) { state.history = []; localStorage.setItem("or_history", "[]"); renderHistory(); } };
 $("exportHist").onclick = () => {
   const blob = new Blob([JSON.stringify(state.history, null, 2)], { type: "application/json" });
   saveBlob(blob, stamp() + "-generation-history.json");
 };
-
-function addMediaCard({ kind, srcUrl, mediaTag, prompt, model, cost, file }) {
-  const c = document.createElement("div");
-  c.className = "card";
-  c.innerHTML = `${mediaTag}
-    <div class="meta">
-      <div class="prompt">${escapeHtml(prompt)}</div>
-      ${kind === "video" ? "🎬" : "🖼"} ${escapeHtml(model)} · ${new Date().toLocaleString()}<br>
-      ${cost != null ? "cost: $" + cost + " · " : ""}saved: ${escapeHtml(file)}
-    </div>`;
-  $("results").prepend(c);
-}
 
 /* ---------- image generation ---------- */
 $("genImg").onclick = async () => {
@@ -413,8 +512,11 @@ $("genImg").onclick = async () => {
   const n = parseInt($("imgN").value) || 1;
   if (n > 1) body.n = n;
 
-  $("genImg").disabled = true;
-  setStatus("Generating image on " + model + "…", "busy", true);
+  const card = createCard({ kind: "image", prompt, model, status: "generating", statusText: "Generating image…" });
+  card.classList.add("live");
+  updateHistCount();
+  setStatus(`Queued: image on ${model}. You can queue more.`, "busy", true);
+
   try {
     const res = await fetchJSON(OR + "/images", {
       method: "POST",
@@ -422,23 +524,31 @@ $("genImg").onclick = async () => {
       body: JSON.stringify(body)
     });
     const cost = res.usage?.cost ?? null;
-    let idx = 0;
-    for (const d of res.data || []) {
+    const items = res.data || [];
+    if (items.length === 0) throw new Error("No image in response.");
+    // first image replaces the card; extras append new cards
+    for (let i = 0; i < items.length; i++) {
+      const d = items[i];
       const mediaType = d.media_type || ("image/" + fmt);
       const ext = mediaType.includes("svg") ? "svg" : fmt;
       const bytes = Uint8Array.from(atob(d.b64_json), ch => ch.charCodeAt(0));
       const blob = new Blob([bytes], { type: mediaType });
-      const filename = `${stamp()}-${slugify(prompt)}${res.data.length > 1 ? "-" + (++idx) : ""}.${ext}`;
-      const saved = await saveBlob(blob, filename);
+      const filename = `${stamp()}-${slugify(prompt)}${items.length > 1 ? "-" + (i+1) : ""}.${ext}`;
       const url = URL.createObjectURL(blob);
-      addMediaCard({ kind: "image", mediaTag: `<img src="${url}" alt="">`, prompt, model, cost, file: filename });
-      pushHistory({ kind: "image", prompt, model, cost, file: filename, time: new Date().toLocaleString(), saved, sessionLive: false });
+      if (i === 0) {
+        setCardMedia(card, { kind: "image", blob, url, cost, filename });
+      } else {
+        const extra = createCard({ kind: "image", prompt, model, status: "done", statusText: "" });
+        extra.classList.add("live");
+        setCardMedia(extra, { kind: "image", blob, url, cost, filename });
+      }
+      pushHistory({ kind: "image", prompt, model, cost, file: filename, time: new Date().toLocaleString() });
     }
-    setStatus(`Done — ${res.data?.length || 0} image(s)` + (cost != null ? `, cost $${cost}` : "") + ".", "ok");
+    updateHistCount();
+    setStatus(`Image done — ${items.length} image(s)` + (cost != null ? `, cost $${cost}` : "") + ".", "ok");
   } catch (e) {
+    setCardError(card, e.message);
     setStatus("Image generation failed: " + e.message, "err");
-  } finally {
-    $("genImg").disabled = false;
   }
 };
 
@@ -455,8 +565,11 @@ $("genVid").onclick = async () => {
   if ($("vidAR").value) body.aspect_ratio = $("vidAR").value;
   if ($("vidAudio").value) body.generate_audio = $("vidAudio").value === "true";
 
-  $("genVid").disabled = true;
-  setStatus("Submitting video job to " + model + "…", "busy", true);
+  const card = createCard({ kind: "video", prompt, model, status: "pending", statusText: "Submitting job…" });
+  card.classList.add("live");
+  updateHistCount();
+  setStatus(`Queued: video on ${model}. You can queue more.`, "busy", true);
+
   try {
     const job = await fetchJSON(OR + "/videos", {
       method: "POST",
@@ -466,22 +579,24 @@ $("genVid").onclick = async () => {
     const pollUrl = job.polling_url || (OR + "/videos/" + job.id);
     let waited = 0;
     while (true) {
-      setStatus(`Video job ${job.id}: ${job.status || "pending"} — ${waited}s elapsed (typical 1–5 min)…`, "busy", true);
+      updateCardPlaceholder(card, `Job ${job.id}: ${job.status || "pending"} — ${waited}s elapsed`);
       await new Promise(r => setTimeout(r, 10000)); waited += 10;
       const st = await fetchJSON(pollUrl, { headers: { "Authorization": "Bearer " + key } });
       job.status = st.status;
       if (st.status === "completed") {
-        setStatus("Downloading video…", "busy", true);
+        updateCardPlaceholder(card, "Downloading video…");
         const vidUrl = st.unsigned_urls?.[0] || st.urls?.[0];
         if (!vidUrl) throw new Error("Job completed but no content URL in response.");
         const vres = await fetch(vidUrl);
         const blob = await vres.blob();
+        // ensure correct MIME type for <video> playback
+        const typedBlob = blob.type === "video/mp4" ? blob : new Blob([blob], { type: "video/mp4" });
         const filename = `${stamp()}-${slugify(prompt)}.mp4`;
-        const saved = await saveBlob(blob, filename);
-        const url = URL.createObjectURL(blob);
+        const url = URL.createObjectURL(typedBlob);
         const cost = st.usage?.cost ?? null;
-        addMediaCard({ kind: "video", mediaTag: `<video src="${url}" controls></video>`, prompt, model, cost, file: filename });
-        pushHistory({ kind: "video", prompt, model, cost, file: filename, time: new Date().toLocaleString(), saved, sessionLive: false });
+        setCardMedia(card, { kind: "video", blob: typedBlob, url, cost, filename });
+        pushHistory({ kind: "video", prompt, model, cost, file: filename, time: new Date().toLocaleString() });
+        updateHistCount();
         setStatus(`Video done after ~${waited}s` + (cost != null ? `, cost $${cost}` : "") + ".", "ok");
         break;
       }
@@ -489,9 +604,8 @@ $("genVid").onclick = async () => {
       if (waited > 900) throw new Error("Timed out after 15 minutes — check the OpenRouter dashboard for job " + job.id);
     }
   } catch (e) {
+    setCardError(card, e.message);
     setStatus("Video generation failed: " + e.message, "err");
-  } finally {
-    $("genVid").disabled = false;
   }
 };
 
