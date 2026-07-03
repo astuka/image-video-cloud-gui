@@ -384,7 +384,7 @@ function updateCardPlaceholder(card, text) {
 function setCardMedia(card, { kind, blob, url, cost, filename }) {
   const mediaArea = card.querySelector(".placeholder") || card.querySelector("img,video")?.parentElement;
   const mediaEl = kind === "video"
-    ? `<video src="${url}" controls preload="metadata" type="video/mp4"></video>`
+    ? `<video src="${url}" controls preload="metadata"></video>`
     : `<img src="${url}" alt="">`;
   if (mediaArea) mediaArea.outerHTML = mediaEl;
 
@@ -398,6 +398,8 @@ function setCardMedia(card, { kind, blob, url, cost, filename }) {
 
   const actions = card.querySelector(".actions");
   actions.innerHTML = "";
+
+  // Save button
   const saveBtn = document.createElement("button");
   saveBtn.className = "small secondary";
   saveBtn.textContent = "💾 Save";
@@ -414,11 +416,30 @@ function setCardMedia(card, { kind, blob, url, cost, filename }) {
   };
   actions.appendChild(saveBtn);
 
+  // Reuse button
   const reuseBtn = document.createElement("button");
   reuseBtn.className = "small secondary";
   reuseBtn.textContent = "↻ Reuse";
   reuseBtn.onclick = () => reusePrompt(kind, card.dataset.prompt, card.dataset.model);
   actions.appendChild(reuseBtn);
+
+  // Delete button — removes card from grid and revokes object URL
+  const delBtn = document.createElement("button");
+  delBtn.className = "small secondary";
+  delBtn.textContent = "🗑 Delete";
+  delBtn.style.borderColor = "var(--err)";
+  delBtn.style.color = "var(--err)";
+  delBtn.onclick = () => {
+    // revoke the blob URL to free memory
+    const mediaEl = card.querySelector("img, video");
+    if (mediaEl && mediaEl.src && mediaEl.src.startsWith("blob:")) {
+      URL.revokeObjectURL(mediaEl.src);
+    }
+    card.remove();
+    updateHistCount();
+    setStatus("Card removed from view.", "ok");
+  };
+  actions.appendChild(delBtn);
 }
 
 function setCardError(card, errorMsg) {
@@ -466,7 +487,9 @@ function updateHistCount() {
 }
 function renderHistoryCards() {
   const box = $("results");
+  let idx = 0;
   for (const h of state.history) {
+    const cardIdx = idx;
     const c = document.createElement("div");
     c.className = "card histonly";
     const costStr = h.cost != null ? ` · cost: $${h.cost}` : "";
@@ -481,11 +504,20 @@ function renderHistoryCards() {
       </div>
       <div class="actions">
         <button class="small secondary" onclick="reusePrompt('${h.kind}', ${JSON.stringify(h.prompt).replace(/"/g, "&quot;")}, '${escapeHtml(h.model)}')">↻ Reuse</button>
+        <button class="small secondary" style="border-color:var(--err);color:var(--err)" onclick="deleteHistCard(${cardIdx})">🗑 Delete</button>
       </div>`;
     box.appendChild(c);
+    idx++;
   }
   updateHistCount();
 }
+window.deleteHistCard = (idx) => {
+  state.history.splice(idx, 1);
+  localStorage.setItem("or_history", JSON.stringify(state.history));
+  document.querySelectorAll("#results .card.histonly").forEach(el => el.remove());
+  renderHistoryCards();
+  setStatus("History entry removed.", "ok");
+};
 $("clearHist").onclick = () => {
   if (confirm("Clear all history entries?")) {
     state.history = [];
@@ -587,10 +619,39 @@ $("genVid").onclick = async () => {
         updateCardPlaceholder(card, "Downloading video…");
         const vidUrl = st.unsigned_urls?.[0] || st.urls?.[0];
         if (!vidUrl) throw new Error("Job completed but no content URL in response.");
-        const vres = await fetch(vidUrl);
-        const blob = await vres.blob();
-        // ensure correct MIME type for <video> playback
-        const typedBlob = blob.type === "video/mp4" ? blob : new Blob([blob], { type: "video/mp4" });
+        // Try the unsigned URL first (no auth needed); if that fails, fall back
+        // to the authenticated /content endpoint with the Authorization header
+        let vres;
+        try {
+          vres = await fetch(vidUrl);
+        } catch (fetchErr) {
+          // network error — try authenticated content endpoint
+          vres = await fetch(OR + "/videos/" + job.id + "/content?index=0", {
+            headers: { "Authorization": "Bearer " + key }
+          });
+        }
+        // If the unsigned URL returned an error status, try authed endpoint
+        if (!vres.ok) {
+          vres = await fetch(OR + "/videos/" + job.id + "/content?index=0", {
+            headers: { "Authorization": "Bearer " + key }
+          });
+        }
+        if (!vres.ok) {
+          let errMsg = "Download failed: " + vres.status + " " + vres.statusText;
+          try { const ej = await vres.json(); errMsg = ej.error?.message || errMsg; } catch {}
+          throw new Error(errMsg);
+        }
+        const rawBlob = await vres.blob();
+        // Validate: if the response isn't actually video, it's probably an error page
+        const contentType = vres.headers.get("content-type") || rawBlob.type || "";
+        if (contentType.includes("application/json") || contentType.includes("text/html") || rawBlob.size < 1000) {
+          // Try to read as error message
+          let detail = "";
+          try { detail = await rawBlob.text(); const j = JSON.parse(detail); detail = j.error?.message || detail; } catch {}
+          throw new Error("Video download returned non-video content" + (detail ? ": " + detail.slice(0, 200) : ""));
+        }
+        // Force correct MIME type for playback
+        const typedBlob = new Blob([rawBlob], { type: "video/mp4" });
         const filename = `${stamp()}-${slugify(prompt)}.mp4`;
         const url = URL.createObjectURL(typedBlob);
         const cost = st.usage?.cost ?? null;
