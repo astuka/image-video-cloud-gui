@@ -115,7 +115,7 @@
       </div>
       <div class="row">
         <div><label>Count (n)</label><input type="number" id="imgN" value="1" min="1" max="10"></div>
-        <div><label>Format</label><select id="imgFmt"><option>png</option><option>jpeg</option><option>webp</option></select></div>
+        <div><label>Format</label><select id="imgFmt"><option value="">default</option><option>png</option><option>jpeg</option><option>webp</option></select></div>
       </div>
       <button id="genImg" style="margin-top:12px;width:100%">Queue image</button>
     </fieldset>
@@ -325,6 +325,21 @@ function onImgModelChange() {
   const sp = m?.supported_parameters || {};
   setOptions($("imgRes"), sp.resolution?.values || ["512","1K","2K","4K"]);
   setOptions($("imgAR"), sp.aspect_ratio?.values || DEFAULT_AR);
+  // Format dropdown: only show formats the model actually supports
+  const fmtSel = $("imgFmt");
+  if (sp.output_format?.values) {
+    const cur = fmtSel.value;
+    fmtSel.innerHTML = '<option value="">default</option>';
+    for (const v of sp.output_format.values) {
+      const o = document.createElement("option");
+      o.value = v; o.textContent = v;
+      fmtSel.appendChild(o);
+    }
+    if ([...fmtSel.options].some(o => o.value === cur)) fmtSel.value = cur;
+  } else {
+    // Model doesn't declare output_format support — offer "default" only
+    fmtSel.innerHTML = '<option value="">default</option>';
+  }
   $("imgModelInfo").textContent = m?.description ? m.description.slice(0, 180) + "…" : "";
 }
 function onVidModelChange() {
@@ -454,6 +469,18 @@ function setCardError(card, errorMsg) {
   retryBtn.textContent = "↻ Reuse";
   retryBtn.onclick = () => reusePrompt(card.dataset.kind, card.dataset.prompt, card.dataset.model);
   actions.appendChild(retryBtn);
+  // Delete button for error cards
+  const delBtn = document.createElement("button");
+  delBtn.className = "small secondary";
+  delBtn.textContent = "🗑 Delete";
+  delBtn.style.borderColor = "var(--err)";
+  delBtn.style.color = "var(--err)";
+  delBtn.onclick = () => {
+    card.remove();
+    updateHistCount();
+    setStatus("Error card removed.", "ok");
+  };
+  actions.appendChild(delBtn);
 }
 
 function reusePrompt(kind, prompt, model) {
@@ -537,8 +564,9 @@ $("genImg").onclick = async () => {
   const prompt = $("imgPrompt").value.trim();
   if (!prompt) return setStatus("Write a prompt first.", "err");
   const model = $("imgModel").value;
-  const fmt = $("imgFmt").value;
-  const body = { model, prompt, output_format: fmt };
+  const fmt = $("imgFmt").value; // empty string = "default", don't send
+  const body = { model, prompt };
+  if (fmt) body.output_format = fmt;
   if ($("imgRes").value) body.resolution = $("imgRes").value;
   if ($("imgAR").value) body.aspect_ratio = $("imgAR").value;
   const n = parseInt($("imgN").value) || 1;
@@ -561,8 +589,8 @@ $("genImg").onclick = async () => {
     // first image replaces the card; extras append new cards
     for (let i = 0; i < items.length; i++) {
       const d = items[i];
-      const mediaType = d.media_type || ("image/" + fmt);
-      const ext = mediaType.includes("svg") ? "svg" : fmt;
+      const mediaType = d.media_type || (fmt ? "image/" + fmt : "image/png");
+      const ext = mediaType.includes("svg") ? "svg" : (mediaType.split("/")[1] || fmt || "png");
       const bytes = Uint8Array.from(atob(d.b64_json), ch => ch.charCodeAt(0));
       const blob = new Blob([bytes], { type: mediaType });
       const filename = `${stamp()}-${slugify(prompt)}${items.length > 1 ? "-" + (i+1) : ""}.${ext}`;
