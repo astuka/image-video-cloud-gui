@@ -63,6 +63,18 @@
   .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--warn); border-top-color: transparent; border-radius: 50%; animation: sp 0.8s linear infinite; vertical-align: -2px; margin-right: 6px; }
   .spin.big { width: 28px; height: 28px; border-width: 3px; }
   @keyframes sp { to { transform: rotate(360deg); } }
+  .imgref-area { border: 1px dashed var(--border); border-radius: 6px; padding: 8px; margin-top: 4px; }
+  .imgref-area.has-images { border-style: solid; border-color: var(--accent); }
+  .imgref-drop { font-size: 12px; color: var(--muted); text-align: center; padding: 12px 0; cursor: pointer; }
+  .imgref-drop:hover { color: var(--accent); }
+  .imgref-thumbs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .imgref-thumb { position: relative; width: 56px; height: 56px; border-radius: 6px; overflow: hidden; border: 1px solid var(--border); }
+  .imgref-thumb img { width: 100%; height: 100%; object-fit: cover; }
+  .imgref-thumb .remove { position: absolute; top: 2px; right: 2px; width: 16px; height: 16px; background: rgba(0,0,0,0.7); color: #fff; border: none; border-radius: 50%; font-size: 10px; cursor: pointer; display: flex; align-items: center; justify-content: center; line-height: 1; padding: 0; }
+  .imgref-thumb .remove:hover { background: var(--err); }
+  .imgref-mode { display: flex; gap: 6px; margin-top: 6px; }
+  .imgref-mode label { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--muted); margin: 0; cursor: pointer; }
+  .imgref-mode input[type=radio] { margin: 0; }
   a { color: var(--accent); }
 </style>
 </head>
@@ -117,6 +129,12 @@
         <div><label>Count (n)</label><input type="number" id="imgN" value="1" min="1" max="10"></div>
         <div><label>Format</label><select id="imgFmt"><option value="">default</option><option>png</option><option>jpeg</option><option>webp</option></select></div>
       </div>
+      <label>Reference image(s) — image-to-image</label>
+      <div class="imgref-area" id="imgRefArea">
+        <div class="imgref-drop" id="imgRefDrop">📎 Click or drag image(s) here</div>
+        <div class="imgref-thumbs" id="imgRefThumbs"></div>
+        <input type="file" id="imgRefInput" accept="image/*" multiple style="display:none">
+      </div>
       <button id="genImg" style="margin-top:12px;width:100%">Queue image</button>
     </fieldset>
 
@@ -135,6 +153,17 @@
       <div class="row">
         <div><label>Aspect ratio</label><select id="vidAR"><option value="">auto</option></select></div>
         <div><label>Audio</label><select id="vidAudio"><option value="">model default</option><option value="true">on</option><option value="false">off</option></select></div>
+      </div>
+      <label>Image attachment</label>
+      <div class="imgref-mode">
+        <label><input type="radio" name="vidRefMode" value="none" checked> None</label>
+        <label><input type="radio" name="vidRefMode" value="frame"> Image-to-video (first frame)</label>
+        <label><input type="radio" name="vidRefMode" value="reference"> Reference</label>
+      </div>
+      <div class="imgref-area" id="vidRefArea">
+        <div class="imgref-drop" id="vidRefDrop">📎 Click or drag an image here</div>
+        <div class="imgref-thumbs" id="vidRefThumbs"></div>
+        <input type="file" id="vidRefInput" accept="image/*" style="display:none">
       </div>
       <button id="genVid" style="margin-top:12px;width:100%">Queue video</button>
     </fieldset>
@@ -158,7 +187,7 @@
 "use strict";
 const OR = "https://openrouter.ai/api/v1";
 const $ = id => document.getElementById(id);
-const state = { imgModels: [], vidModels: [], dirHandle: null, history: [], liveCards: [] };
+const state = { imgModels: [], vidModels: [], dirHandle: null, history: [], liveCards: [], imgRefs: [], vidRef: null };
 
 /* ---------- fallback model lists (snapshot 2026-07-02, used if live fetch fails) ---------- */
 const FALLBACK_IMG = [
@@ -558,6 +587,122 @@ $("exportHist").onclick = () => {
   saveBlob(blob, stamp() + "-generation-history.json");
 };
 
+/* ---------- image reference management ---------- */
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
+}
+
+function renderImgRefThumbs() {
+  const box = $("imgRefThumbs");
+  box.innerHTML = "";
+  const area = $("imgRefArea");
+  area.classList.toggle("has-images", state.imgRefs.length > 0);
+  $("imgRefDrop").style.display = state.imgRefs.length > 0 ? "none" : "";
+  for (let i = 0; i < state.imgRefs.length; i++) {
+    const ref = state.imgRefs[i];
+    const div = document.createElement("div");
+    div.className = "imgref-thumb";
+    const img = document.createElement("img");
+    img.src = ref.dataUrl;
+    div.appendChild(img);
+    const btn = document.createElement("button");
+    btn.className = "remove";
+    btn.textContent = "×";
+    btn.title = "Remove";
+    btn.onclick = (e) => { e.stopPropagation(); state.imgRefs.splice(i, 1); renderImgRefThumbs(); };
+    div.appendChild(btn);
+    box.appendChild(div);
+  }
+}
+
+function renderVidRefThumb() {
+  const box = $("vidRefThumbs");
+  box.innerHTML = "";
+  const area = $("vidRefArea");
+  area.classList.toggle("has-images", !!state.vidRef);
+  $("vidRefDrop").style.display = state.vidRef ? "none" : "";
+  if (state.vidRef) {
+    const div = document.createElement("div");
+    div.className = "imgref-thumb";
+    const img = document.createElement("img");
+    img.src = state.vidRef.dataUrl;
+    div.appendChild(img);
+    const btn = document.createElement("button");
+    btn.className = "remove";
+    btn.textContent = "×";
+    btn.title = "Remove";
+    btn.onclick = (e) => { e.stopPropagation(); state.vidRef = null; renderVidRefThumb(); };
+    div.appendChild(btn);
+    box.appendChild(div);
+  }
+}
+
+async function addImgRefFiles(files) {
+  for (const f of files) {
+    if (!f.type.startsWith("image/")) continue;
+    const dataUrl = await fileToDataUrl(f);
+    state.imgRefs.push({ dataUrl, name: f.name });
+  }
+  renderImgRefThumbs();
+}
+
+async function addVidRefFile(file) {
+  if (!file.type.startsWith("image/")) return;
+  const dataUrl = await fileToDataUrl(file);
+  state.vidRef = { dataUrl, name: file.name };
+  renderVidRefThumb();
+}
+
+function getVidRefMode() {
+  const el = document.querySelector('input[name="vidRefMode"]:checked');
+  return el ? el.value : "none";
+}
+
+function clearVidRefIfModeChanged() {
+  // If mode is "none", clear the reference
+  if (getVidRefMode() === "none") {
+    state.vidRef = null;
+    renderVidRefThumb();
+  }
+}
+
+// Wire up image panel reference drop zone
+$("imgRefDrop").onclick = () => $("imgRefInput").click();
+$("imgRefInput").onchange = async (e) => {
+  const files = [...e.target.files];
+  if (files.length) await addImgRefFiles(files);
+  e.target.value = "";
+};
+$("imgRefArea").addEventListener("dragover", (e) => { e.preventDefault(); e.stopPropagation(); });
+$("imgRefArea").addEventListener("drop", async (e) => {
+  e.preventDefault(); e.stopPropagation();
+  const files = [...e.dataTransfer.files];
+  if (files.length) await addImgRefFiles(files);
+});
+
+// Wire up video panel reference drop zone
+$("vidRefDrop").onclick = () => $("vidRefInput").click();
+$("vidRefInput").onchange = async (e) => {
+  const file = e.target.files[0];
+  if (file) await addVidRefFile(file);
+  e.target.value = "";
+};
+$("vidRefArea").addEventListener("dragover", (e) => { e.preventDefault(); e.stopPropagation(); });
+$("vidRefArea").addEventListener("drop", async (e) => {
+  e.preventDefault(); e.stopPropagation();
+  const file = e.dataTransfer.files[0];
+  if (file) await addVidRefFile(file);
+});
+// Clear video ref when mode set to "none"
+document.querySelectorAll('input[name="vidRefMode"]').forEach(r => {
+  r.addEventListener("change", clearVidRefIfModeChanged);
+});
+
 /* ---------- image generation ---------- */
 $("genImg").onclick = async () => {
   const key = requireKey(); if (!key) return;
@@ -571,6 +716,10 @@ $("genImg").onclick = async () => {
   if ($("imgAR").value) body.aspect_ratio = $("imgAR").value;
   const n = parseInt($("imgN").value) || 1;
   if (n > 1) body.n = n;
+  // Add image references for image-to-image generation
+  if (state.imgRefs.length > 0) {
+    body.input_references = state.imgRefs.map(r => ({ type: "image_url", image_url: { url: r.dataUrl } }));
+  }
 
   const card = createCard({ kind: "image", prompt, model, status: "generating", statusText: "Generating image…" });
   card.classList.add("live");
@@ -624,6 +773,14 @@ $("genVid").onclick = async () => {
   if ($("vidRes").value) body.resolution = $("vidRes").value;
   if ($("vidAR").value) body.aspect_ratio = $("vidAR").value;
   if ($("vidAudio").value) body.generate_audio = $("vidAudio").value === "true";
+
+  // Image attachments: frame_images for image-to-video, input_references for reference-to-video
+  const vidMode = getVidRefMode();
+  if (state.vidRef && vidMode === "frame") {
+    body.frame_images = [{ type: "image_url", image_url: { url: state.vidRef.dataUrl }, frame_type: "first_frame" }];
+  } else if (state.vidRef && vidMode === "reference") {
+    body.input_references = [{ type: "image_url", image_url: { url: state.vidRef.dataUrl } }];
+  }
 
   const card = createCard({ kind: "video", prompt, model, status: "pending", statusText: "Submitting job…" });
   card.classList.add("live");
