@@ -464,7 +464,19 @@ function setCardMedia(card, { kind, blob, url, cost, filename }) {
   const reuseBtn = document.createElement("button");
   reuseBtn.className = "small secondary";
   reuseBtn.textContent = "↻ Reuse";
-  reuseBtn.onclick = () => reusePrompt(kind, card.dataset.prompt, card.dataset.model);
+  reuseBtn.onclick = () => reusePrompt(kind, card.dataset.prompt, card.dataset.model, {
+    resolution: card.dataset.resolution || "",
+    aspectRatio: card.dataset.aspectRatio || "",
+    format: card.dataset.format || "",
+    n: card.dataset.n || "",
+    imgRefs: card._imgRefs,
+    hasImgRef: card.dataset.hasImgRef,
+    duration: card.dataset.duration || "",
+    audio: card.dataset.audio || "",
+    vidRefMode: card.dataset.vidRefMode || "",
+    vidRef: card._vidRef,
+    hasVidRef: card.dataset.hasVidRef,
+  });
   actions.appendChild(reuseBtn);
 
   // Delete button — removes card from grid and revokes object URL
@@ -496,7 +508,19 @@ function setCardError(card, errorMsg) {
   const retryBtn = document.createElement("button");
   retryBtn.className = "small secondary";
   retryBtn.textContent = "↻ Reuse";
-  retryBtn.onclick = () => reusePrompt(card.dataset.kind, card.dataset.prompt, card.dataset.model);
+  retryBtn.onclick = () => reusePrompt(card.dataset.kind, card.dataset.prompt, card.dataset.model, {
+    resolution: card.dataset.resolution || "",
+    aspectRatio: card.dataset.aspectRatio || "",
+    format: card.dataset.format || "",
+    n: card.dataset.n || "",
+    imgRefs: card._imgRefs,
+    hasImgRef: card.dataset.hasImgRef,
+    duration: card.dataset.duration || "",
+    audio: card.dataset.audio || "",
+    vidRefMode: card.dataset.vidRefMode || "",
+    vidRef: card._vidRef,
+    hasVidRef: card.dataset.hasVidRef,
+  });
   actions.appendChild(retryBtn);
   // Delete button for error cards
   const delBtn = document.createElement("button");
@@ -512,18 +536,70 @@ function setCardError(card, errorMsg) {
   actions.appendChild(delBtn);
 }
 
-function reusePrompt(kind, prompt, model) {
+function reusePrompt(kind, prompt, model, params = {}) {
   setTab(kind);
   if (kind === "image") {
     $("imgPrompt").value = prompt;
     if ([...$("imgModel").options].some(o => o.value === model)) { $("imgModel").value = model; onImgModelChange(); }
+    if (params.resolution && [...$("imgRes").options].some(o => o.value === params.resolution)) $("imgRes").value = params.resolution;
+    if (params.aspectRatio && [...$("imgAR").options].some(o => o.value === params.aspectRatio)) $("imgAR").value = params.aspectRatio;
+    if (params.format && [...$("imgFmt").options].some(o => o.value === params.format)) $("imgFmt").value = params.format;
+    if (params.n) $("imgN").value = params.n;
+    // Restore image references
+    if (params.imgRefs && params.imgRefs.length > 0) {
+      state.imgRefs = params.imgRefs.map(r => ({ ...r }));
+      renderImgRefThumbs();
+      setStatus("Restored reference image(s) from original generation.", "ok");
+    } else {
+      state.imgRefs = [];
+      renderImgRefThumbs();
+      if (params.hasImgRef === "true" || params.hasImgRef === true) {
+        setStatus("Original had reference image(s) — not preserved in history. Re-attach manually.", "warn");
+      }
+    }
   } else {
     $("vidPrompt").value = prompt;
     if ([...$("vidModel").options].some(o => o.value === model)) { $("vidModel").value = model; onVidModelChange(); }
+    if (params.resolution && [...$("vidRes").options].some(o => o.value === params.resolution)) $("vidRes").value = params.resolution;
+    if (params.aspectRatio && [...$("vidAR").options].some(o => o.value === params.aspectRatio)) $("vidAR").value = params.aspectRatio;
+    if (params.duration) $("vidDur").value = params.duration;
+    if (params.audio && [...$("vidAudio").options].some(o => o.value === params.audio)) $("vidAudio").value = params.audio;
+    // Restore video ref mode
+    if (params.vidRefMode) {
+      const radio = document.querySelector(`input[name="vidRefMode"][value="${params.vidRefMode}"]`);
+      if (radio) radio.checked = true;
+    }
+    if (params.vidRef) {
+      state.vidRef = { ...params.vidRef };
+      renderVidRefThumb();
+      setStatus("Restored image attachment from original generation.", "ok");
+    } else {
+      state.vidRef = null;
+      renderVidRefThumb();
+      if (params.hasVidRef === "true" || params.hasVidRef === true) {
+        setStatus("Original had an image attachment — not preserved in history. Re-attach manually.", "warn");
+      }
+    }
   }
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 window.reusePrompt = reusePrompt;
+
+window.reuseFromHistory = (idx) => {
+  const h = state.history[idx];
+  if (!h) return;
+  reusePrompt(h.kind, h.prompt, h.model, {
+    resolution: h.resolution,
+    aspectRatio: h.aspectRatio,
+    format: h.format,
+    n: h.n,
+    hasImgRef: h.hasImgRef,
+    duration: h.duration,
+    audio: h.audio,
+    vidRefMode: h.vidRefMode,
+    hasVidRef: h.hasVidRef,
+  });
+};
 
 /* ---------- history (localStorage text records, rendered as text-only cards on load) ---------- */
 function loadHistory() {
@@ -559,7 +635,7 @@ function renderHistoryCards() {
         ${escapeHtml(h.model)} · ${escapeHtml(h.time || "")}${costStr}
       </div>
       <div class="actions">
-        <button class="small secondary" onclick="reusePrompt('${h.kind}', ${JSON.stringify(h.prompt).replace(/"/g, "&quot;")}, '${escapeHtml(h.model)}')">↻ Reuse</button>
+        <button class="small secondary" onclick="reuseFromHistory(${cardIdx})">↻ Reuse</button>
         <button class="small secondary" style="border-color:var(--err);color:var(--err)" onclick="deleteHistCard(${cardIdx})">🗑 Delete</button>
       </div>`;
     box.appendChild(c);
@@ -723,6 +799,14 @@ $("genImg").onclick = async () => {
 
   const card = createCard({ kind: "image", prompt, model, status: "generating", statusText: "Generating image…" });
   card.classList.add("live");
+  // Store all params on the card for reuse
+  card.dataset.resolution = $("imgRes").value;
+  card.dataset.aspectRatio = $("imgAR").value;
+  card.dataset.format = fmt;
+  card.dataset.n = n;
+  card.dataset.hasImgRef = state.imgRefs.length > 0;
+  // Store full ref data URLs on the card object (not in DOM) for exact restoration
+  card._imgRefs = state.imgRefs.length > 0 ? state.imgRefs.map(r => ({ dataUrl: r.dataUrl, name: r.name })) : null;
   updateHistCount();
   setStatus(`Queued: image on ${model}. You can queue more.`, "busy", true);
 
@@ -751,7 +835,9 @@ $("genImg").onclick = async () => {
         extra.classList.add("live");
         setCardMedia(extra, { kind: "image", blob, url, cost, filename });
       }
-      pushHistory({ kind: "image", prompt, model, cost, file: filename, time: new Date().toLocaleString() });
+      pushHistory({ kind: "image", prompt, model, cost, file: filename, time: new Date().toLocaleString(),
+        resolution: $("imgRes").value, aspectRatio: $("imgAR").value, format: fmt, n: n > 1 ? String(n) : "",
+        hasImgRef: state.imgRefs.length > 0 });
     }
     updateHistCount();
     setStatus(`Image done — ${items.length} image(s)` + (cost != null ? `, cost $${cost}` : "") + ".", "ok");
@@ -784,6 +870,15 @@ $("genVid").onclick = async () => {
 
   const card = createCard({ kind: "video", prompt, model, status: "pending", statusText: "Submitting job…" });
   card.classList.add("live");
+  // Store all params on the card for reuse
+  card.dataset.resolution = $("vidRes").value;
+  card.dataset.aspectRatio = $("vidAR").value;
+  card.dataset.duration = dur || "";
+  card.dataset.audio = $("vidAudio").value;
+  card.dataset.vidRefMode = vidMode;
+  card.dataset.hasVidRef = !!state.vidRef;
+  // Store full ref data URL on the card object (not in DOM) for exact restoration
+  card._vidRef = state.vidRef ? { dataUrl: state.vidRef.dataUrl, name: state.vidRef.name } : null;
   updateHistCount();
   setStatus(`Queued: video on ${model}. You can queue more.`, "busy", true);
 
@@ -841,7 +936,9 @@ $("genVid").onclick = async () => {
         const url = URL.createObjectURL(typedBlob);
         const cost = st.usage?.cost ?? null;
         setCardMedia(card, { kind: "video", blob: typedBlob, url, cost, filename });
-        pushHistory({ kind: "video", prompt, model, cost, file: filename, time: new Date().toLocaleString() });
+        pushHistory({ kind: "video", prompt, model, cost, file: filename, time: new Date().toLocaleString(),
+          resolution: $("vidRes").value, aspectRatio: $("vidAR").value, duration: dur || "",
+          audio: $("vidAudio").value, vidRefMode: vidMode, hasVidRef: !!state.vidRef });
         updateHistCount();
         setStatus(`Video done after ~${waited}s` + (cost != null ? `, cost $${cost}` : "") + ".", "ok");
         break;
